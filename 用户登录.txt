@@ -1,0 +1,401 @@
+#include <bits/stdc++.h>
+#include <limits>
+#include <fstream>
+#include <cstdio>
+#include <ctime>
+#ifdef _WIN32
+#include <conio.h>  // Windows下密码隐藏输入
+#else
+#include <termios.h> // Linux/macOS下密码隐藏输入
+#include <unistd.h>
+#endif
+
+using namespace std;
+
+// 常量定义
+const int MAX_USER = 1000;       // 最大用户数
+const string USER_FILE = "users.txt"; // 用户数据存储文件
+int total_people = 0;            // 已注册用户数
+int login_user_index = -1;       // 当前登录用户索引（-1未登录）
+
+// 用户结构体
+struct person {
+    string Username;             // 用户名
+    string UserPassword;         // 加密后的密码
+    int Verificationcode;        // 4位验证码
+    int role;                    // 权限：0-普通用户，1-管理员
+} a[MAX_USER];
+
+// ===================== 工具函数 =====================
+// MD5加密核心（简化版，可直接使用）
+string md5Encrypt(const string& input) {
+    unsigned int h0, h1, h2, h3;
+    h0 = 0x67452301; h1 = 0xEFCDAB89; h2 = 0x98BADCFE; h3 = 0x10325476;
+
+    vector<unsigned char> msg(input.begin(), input.end());
+    unsigned long long bitLen = msg.size() * 8;
+    msg.push_back(0x80);
+
+    while ((msg.size() * 8) % 512 != 448) msg.push_back(0);
+    for (int i = 0; i < 8; ++i) msg.push_back((bitLen >> (56 - 8*i)) & 0xFF);
+
+    for (size_t i = 0; i < msg.size(); i += 64) {
+        unsigned int w[16];
+        for (int j = 0; j < 16; ++j) w[j] = (msg[i+j*4]<<24) | (msg[i+j*4+1]<<16) | (msg[i+j*4+2]<<8) | msg[i+j*4+3];
+
+        unsigned int a = h0, b = h1, c = h2, d = h3, f, g, temp;
+        for (int j = 0; j < 64; ++j) {
+            if (j < 16) { f = (b & c) | ((~b) & d); g = j; }
+            else if (j < 32) { f = (d & b) | ((~d) & c); g = (5*j + 1) % 16; }
+            else if (j < 48) { f = b ^ c ^ d; g = (3*j + 5) % 16; }
+            else { f = c ^ (b | (~d)); g = (7*j) % 16; }
+
+            temp = d; d = c; c = b;
+            b = b + ((a + f + 0x5A827999 + w[g]) << 7 | (a + f + 0x5A827999 + w[g]) >> 25);
+            a = temp;
+        }
+        h0 += a; h1 += b; h2 += c; h3 += d;
+    }
+
+    char res[33];
+    sprintf(res, "%08x%08x%08x%08x", h0, h1, h2, h3);
+    return string(res);
+}
+
+// 跨平台密码隐藏输入
+string inputPassword(const string& prompt) {
+    cout << prompt;
+    string pwd;
+#ifdef _WIN32
+    // Windows实现
+    char ch;
+    while ((ch = _getch()) != '\r') {
+        if (ch == '\b') { // 退格键
+            if (!pwd.empty()) {
+                pwd.pop_back();
+                cout << "\b \b"; // 清除屏幕上的*
+            }
+        } else if (ch != '\t' && ch != ' ') { // 过滤空格和制表符
+            pwd.push_back(ch);
+            cout << "*";
+        }
+    }
+#else
+    // Linux/macOS实现
+    struct termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(ECHO | ICANON);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+
+    char ch;
+    while (read(STDIN_FILENO, &ch, 1) == 1 && ch != '\n') {
+        if (ch == '\b' || ch == 127) { // 退格键
+            if (!pwd.empty()) {
+                pwd.pop_back();
+                cout << "\b \b";
+            }
+        } else if (ch != '\t' && ch != ' ') {
+            pwd.push_back(ch);
+            cout << "*";
+        }
+    }
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt); // 恢复终端设置
+#endif
+    cout << endl;
+    return pwd;
+}
+
+// 密码格式验证（大写+小写+数字，无特殊字符）
+bool Verify(const string& password) {
+    bool has_upper = false, has_lower = false, has_number = false;
+    for (char c : password) {
+        if (isupper(c)) has_upper = true;
+        else if (islower(c)) has_lower = true;
+        else if (isdigit(c)) has_number = true;
+        else return false; // 含特殊字符
+    }
+    return has_upper && has_lower && has_number;
+}
+
+// ===================== 数据持久化 =====================
+// 加载用户数据从文件
+void loadUsers() {
+    ifstream fin(USER_FILE);
+    if (!fin.is_open()) {
+        cout << "首次运行，未检测到用户数据文件，将创建新文件！" << endl;
+        return;
+    }
+
+    fin >> total_people;
+    for (int i = 0; i < total_people; i++) {
+        fin >> a[i].Username >> a[i].UserPassword >> a[i].Verificationcode >> a[i].role;
+    }
+    fin.close();
+    cout << "成功加载 " << total_people << " 个用户数据！" << endl;
+}
+
+// 保存用户数据到文件
+void saveUsers() {
+    ofstream fout(USER_FILE);
+    if (!fout.is_open()) {
+        cout << "错误：无法保存用户数据！" << endl;
+        return;
+    }
+
+    fout << total_people << endl;
+    for (int i = 0; i < total_people; i++) {
+        fout << a[i].Username << " "
+             << a[i].UserPassword << " "
+             << a[i].Verificationcode << " "
+             << a[i].role << endl;
+    }
+    fout.close();
+}
+
+// ===================== 业务功能 =====================
+// 管理员界面
+void adminInterface() {
+    cout << "\n===== 管理员界面 =====" << endl;
+    cout << "1. 查看所有用户" << endl;
+    cout << "2. 提升用户权限" << endl;
+    cout << "3. 返回主菜单" << endl;
+
+    int choice;
+    while (!(cin >> choice)) {
+        cin.clear();
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+        cout << "错误：请输入数字！重试：";
+    }
+
+    switch (choice) {
+        case 1:
+            cout << "\n===== 所有用户列表 =====" << endl;
+            cout << "序号\t用户名\t权限" << endl;
+            for (int i = 0; i < total_people; i++) {
+                cout << i+1 << "\t" << a[i].Username << "\t"
+                     << (a[i].role == 1 ? "管理员" : "普通用户") << endl;
+            }
+            break;
+        case 2: {
+            string username;
+            cout << "请输入要提升权限的用户名：";
+            cin >> username;
+            int idx = -1;
+            for (int i = 0; i < total_people; i++) {
+                if (a[i].Username == username) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx == -1) {
+                cout << "错误：用户名不存在！" << endl;
+            } else {
+                a[idx].role = 1;
+                saveUsers();
+                cout << "成功将 " << username << " 提升为管理员！" << endl;
+            }
+            break;
+        }
+        case 3: return;
+        default: cout << "无效选项，返回主菜单！" << endl;
+    }
+}
+
+// 普通用户界面
+void userInterface() {
+    cout << "\n===== 用户中心 =====" << endl;
+    cout << "1. 修改密码" << endl;
+    cout << "2. 查看个人信息" << endl;
+    cout << "3. 退出登录" << endl;
+
+    int choice;
+    while (!(cin >> choice)) {
+        cin.clear();
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+        cout << "错误：请输入数字！重试：";
+    }
+
+    if (choice == 1) {
+        // 修改密码
+        string old_pwd = inputPassword("请输入旧密码：");
+        string old_pwd_md5 = md5Encrypt(old_pwd);
+
+        if (a[login_user_index].UserPassword != old_pwd_md5) {
+            cout << "错误：旧密码不正确！" << endl;
+            return;
+        }
+
+        string new_pwd;
+        while (true) {
+            new_pwd = inputPassword("请输入新密码（大写+小写+数字）：");
+            if (Verify(new_pwd)) break;
+            else cout << "密码格式错误！必须包含大写、小写和数字。" << endl;
+        }
+
+        a[login_user_index].UserPassword = md5Encrypt(new_pwd);
+        saveUsers();
+        cout << "密码修改成功！请重新登录。" << endl;
+        login_user_index = -1; // 登出
+    } else if (choice == 2) {
+        // 查看个人信息
+        cout << "\n===== 个人信息 =====" << endl;
+        cout << "用户名：" << a[login_user_index].Username << endl;
+        cout << "权限：" << (a[login_user_index].role == 1 ? "管理员" : "普通用户") << endl;
+        cout << "验证码：" << a[login_user_index].Verificationcode << endl;
+    } else if (choice == 3) {
+        cout << "退出登录成功！" << endl;
+        login_user_index = -1;
+    } else {
+        cout << "无效选项，自动退出登录！" << endl;
+        login_user_index = -1;
+    }
+}
+
+// 登录函数
+void login() {
+    if (login_user_index != -1) {
+        cout << "\n错误：您已登录，无需重复登录！" << endl;
+        return;
+    }
+
+    string username, password;
+    int verify_code;
+    cout << "\n===== 用户登录 =====" << endl;
+    cout << "用户名：";
+    cin >> username;
+
+    // 验证用户名是否存在
+    int match_idx = -1;
+    for (int i = 0; i < total_people; i++) {
+        if (a[i].Username == username) {
+            match_idx = i;
+            break;
+        }
+    }
+    if (match_idx == -1) {
+        cout << "错误：用户名不存在！" << endl;
+        return;
+    }
+
+    // 验证密码
+    password = inputPassword("密码：");
+    string pwd_md5 = md5Encrypt(password);
+    if (a[match_idx].UserPassword != pwd_md5) {
+        cout << "错误：密码不正确！" << endl;
+        return;
+    }
+
+    // 验证验证码
+    cout << "验证码：";
+    while (!(cin >> verify_code)) {
+        cin.clear();
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+        cout << "错误：请输入数字！重试：";
+    }
+    if (verify_code != a[match_idx].Verificationcode) {
+        cout << "错误：验证码不正确！" << endl;
+        return;
+    }
+
+    // 登录成功
+    login_user_index = match_idx;
+    cout << "登录成功！欢迎您，" << username << "！" << endl;
+
+    // 根据权限进入对应界面
+    if (a[match_idx].role == 1) {
+        adminInterface();
+    } else {
+        userInterface();
+    }
+}
+
+// 注册函数
+void registerUser() {
+    if (total_people >= MAX_USER) {
+        cout << "\n错误：用户数已达上限（" << MAX_USER << "），无法注册！" << endl;
+        return;
+    }
+
+    string username, password;
+    cout << "\n===== 用户注册 =====" << endl;
+
+    // 用户名唯一性检查
+    while (true) {
+        cout << "请设置用户名：";
+        cin >> username;
+        bool duplicate = false;
+        for (int i = 0; i < total_people; i++) {
+            if (a[i].Username == username) {
+                duplicate = true;
+                cout << "错误：用户名已存在！请重新输入。" << endl;
+                break;
+            }
+        }
+        if (!duplicate) break;
+    }
+
+    // 密码格式验证
+    cout << "密码规则：必须包含大写字母、小写字母、数字，无特殊字符" << endl;
+    while (true) {
+        password = inputPassword("请设置密码：");
+        if (Verify(password)) break;
+        else cout << "密码格式错误！请重新设置。" << endl;
+    }
+
+    // 生成验证码（4位）
+    int verify_code = rand() % 9000 + 1000;
+
+    // 保存用户信息（密码加密）
+    a[total_people].Username = username;
+    a[total_people].UserPassword = md5Encrypt(password);
+    a[total_people].Verificationcode = verify_code;
+    a[total_people].role = 0; // 默认普通用户
+    total_people++;
+
+    // 保存到文件
+    saveUsers();
+
+    cout << "注册成功！" << endl;
+    cout << "您的验证码：" << verify_code << "（请妥善保管）" << endl;
+}
+
+// 主菜单
+void mainMenu() {
+    while (true) {
+        cout << "\n===== 欢迎使用用户管理系统 =====" << endl;
+        cout << "1. 登录" << endl;
+        cout << "2. 注册" << endl;
+        cout << "3. 退出系统" << endl;
+        cout << "请选择操作（1/2/3）：";
+
+        int choice;
+        while (!(cin >> choice)) {
+            cin.clear();
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            cout << "错误：请输入数字！重试：";
+        }
+
+        switch (choice) {
+            case 1: login(); break;
+            case 2: registerUser(); break;
+            case 3:
+                cout << "感谢使用，再见！" << endl;
+                return;
+            default:
+                cout << "无效选项，请选择1/2/3！" << endl;
+        }
+    }
+}
+
+// 主函数
+int main() {
+    // 初始化随机数种子
+    srand((unsigned int)time(NULL));
+    // 加载历史用户数据
+    loadUsers();
+    // 启动主菜单
+    mainMenu();
+
+    return 0;
+}
