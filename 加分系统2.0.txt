@@ -1,0 +1,242 @@
+#include <iostream>
+#include <vector>
+#include <string>
+#include <iomanip>
+#include <algorithm>
+#include <fstream>
+#include <sstream>
+
+using namespace std;
+
+// 学生结构体
+struct Student {
+    string id;       // 学号
+    string name;     // 姓名
+    int score;       // 加分分数
+};
+
+// 函数声明
+void showMenu();
+void addStudent(vector<Student>& students);
+void addScore(vector<Student>& students);
+void queryScore(vector<Student>& students);
+void showAll(vector<Student>& students);
+int findStudent(const vector<Student>& students, const string& id);
+bool saveData(const vector<Student>& students);  // 保存数据到文件
+bool loadData(vector<Student>& students);        // 从文件加载数据
+
+// 数据文件路径（程序同目录下的students.txt）
+const string DATA_FILE = "students.txt";
+
+int main() {
+    vector<Student> students;
+    
+    // 启动时加载已有数据
+    if (loadData(students)) {
+        cout << "数据加载成功，共 " << students.size() << " 名学生" << endl;
+    } else {
+        cout << "首次使用或数据文件不存在，将创建新数据" << endl;
+    }
+
+    int choice;
+    do {
+        showMenu();
+        cout << "请输入操作序号: ";
+        while (!(cin >> choice)) {  // 处理非数字输入
+            cin.clear();
+            cin.ignore(1000, '\n');
+            cout << "输入错误，请输入数字: ";
+        }
+        cin.ignore();  // 清除输入缓冲区
+
+        switch(choice) {
+            case 1: addStudent(students); break;
+            case 2: addScore(students); break;
+            case 3: queryScore(students); break;
+            case 4: showAll(students); break;
+            case 0: 
+                if (saveData(students)) {
+                    cout << "数据已保存，系统退出，感谢使用！" << endl;
+                } else {
+                    cout << "数据保存失败，但系统仍将退出！" << endl;
+                }
+                break;
+            default: cout << "输入错误，请重新选择（0-4）！" << endl;
+        }
+    } while(choice != 0);
+    
+    return 0;
+}
+
+// 显示菜单
+void showMenu() {
+    system("cls");  // 清屏（Windows系统，Linux/macOS用"clear"）
+    cout << "\n===== 班级加分管理系统 =====" << endl;
+    cout << "1. 添加学生信息" << endl;
+    cout << "2. 记录学生加分" << endl;
+    cout << "3. 查询学生分数" << endl;
+    cout << "4. 显示所有学生信息" << endl;
+    cout << "0. 退出系统" << endl;
+    cout << "============================" << endl;
+}
+
+// 添加学生
+void addStudent(vector<Student>& students) {
+    Student s;
+    cout << "请输入学号: ";
+    getline(cin, s.id);
+    
+    if (s.id.empty()) {
+        cout << "学号不能为空！" << endl;
+        system("pause");  // 暂停等待用户查看
+        return;
+    }
+    
+    if (findStudent(students, s.id) != -1) {
+        cout << "该学号已存在！" << endl;
+        system("pause");
+        return;
+    }
+    
+    cout << "请输入姓名: ";
+    getline(cin, s.name);
+    if (s.name.empty()) {
+        cout << "姓名不能为空！" << endl;
+        system("pause");
+        return;
+    }
+    
+    s.score = 0;
+    students.push_back(s);
+    cout << "学生信息添加成功！" << endl;
+    system("pause");
+}
+
+// 加分操作
+void addScore(vector<Student>& students) {
+    if (students.empty()) {
+        cout << "当前没有学生信息，请先添加学生！" << endl;
+        system("pause");
+        return;
+    }
+    
+    string id;
+    int score;
+    cout << "请输入学号: ";
+    getline(cin, id);
+    
+    int index = findStudent(students, id);
+    if (index == -1) {
+        cout << "未找到该学生！" << endl;
+        system("pause");
+        return;
+    }
+    
+    cout << "请输入加分分数: ";
+    while (!(cin >> score) || score < 0) {  // 确保输入非负整数
+        cin.clear();
+        cin.ignore(1000, '\n');
+        cout << "输入错误，请输入非负整数: ";
+    }
+    cin.ignore();
+    
+    students[index].score += score;
+    cout << "加分成功！当前总分: " << students[index].score << endl;
+    system("pause");
+}
+
+// 查询分数
+void queryScore(vector<Student>& students) {
+    if (students.empty()) {
+        cout << "当前没有学生信息！" << endl;
+        system("pause");
+        return;
+    }
+    
+    string id;
+    cout << "请输入学号: ";
+    getline(cin, id);
+    
+    int index = findStudent(students, id);
+    if (index == -1) {
+        cout << "未找到该学生！" << endl;
+        system("pause");
+        return;
+    }
+    
+    cout << "\n----- 学生信息 -----" << endl;
+    cout << "学号: " << students[index].id << endl;
+    cout << "姓名: " << students[index].name << endl;
+    cout << "当前加分: " << students[index].score << endl;
+    cout << "---------------------" << endl;
+    system("pause");
+}
+
+// 显示所有学生信息
+void showAll(vector<Student>& students) {
+    if (students.empty()) {
+        cout << "当前没有学生信息！" << endl;
+        system("pause");
+        return;
+    }
+    
+    // 按分数从高到低排序
+    vector<Student> sortedStudents = students;
+    sort(sortedStudents.begin(), sortedStudents.end(), 
+         [](const Student& a, const Student& b) {
+             return a.score > b.score;
+         });
+    
+    // 显示表头
+    cout << left << setw(15) << "学号" 
+         << left << setw(15) << "姓名" 
+         << left << setw(8) << "加分" << endl;
+    cout << "-----------------------------------------" << endl;
+    
+    // 显示学生信息
+    for (const auto& s : sortedStudents) {
+        cout << left << setw(15) << s.id 
+             << left << setw(15) << s.name 
+             << left << setw(8) << s.score << endl;
+    }
+    system("pause");
+}
+
+// 查找学生索引（返回-1表示未找到）
+int findStudent(const vector<Student>& students, const string& id) {
+    for (int i = 0; i < students.size(); i++) {
+        if (students[i].id == id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// 保存数据到文件（格式：学号 姓名 分数，每行一个学生）
+bool saveData(const vector<Student>& students) {
+    ofstream fout(DATA_FILE);
+    if (!fout.is_open()) {
+        return false;
+    }
+    for (const auto& s : students) {
+        fout << s.id << " " << s.name << " " << s.score << endl;
+    }
+    fout.close();
+    return true;
+}
+
+// 从文件加载数据
+bool loadData(vector<Student>& students) {
+    ifstream fin(DATA_FILE);
+    if (!fin.is_open()) {
+        return false;
+    }
+    students.clear();  // 清空现有数据
+    Student s;
+    // 按格式读取：学号（不含空格）、姓名（不含空格）、分数
+    while (fin >> s.id >> s.name >> s.score) {
+        students.push_back(s);
+    }
+    fin.close();
+    return true;
+}
