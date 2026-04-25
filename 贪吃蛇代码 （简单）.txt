@@ -1,0 +1,1488 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <conio.h>
+#include <time.h>
+#include <windows.h>
+#include <string.h>
+
+// 修复gotoxy函数实现，兼容更多环境
+#ifdef _WIN32
+    void gotoxy(int x, int y)
+    {
+        COORD c;
+        c.X = x;
+        c.Y = y;
+        SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), c);
+    }
+#else
+    void gotoxy(int x, int y)
+    {
+        printf("\033[%d;%dH", y, x);
+    }
+#endif
+
+// 游戏模式定义
+#define NORMAL_MODE 1
+#define WALL_MODE 2
+#define PORTAL_MODE 3
+#define POISON_MODE 4
+#define TIMER_MODE 5
+#define GROW_MODE 6
+#define SPLIT_MODE 7    // 分裂模式
+#define MIRROR_MODE 8   // 镜像模式
+
+// 定义标记上下左右的明示常量 
+#define UP 1
+#define DOWN 2
+#define LEFT 3
+#define RIGHT 4
+#define ESC 5 
+#define FOOD 10
+#define POISON_PENALTY 5  // 吃到毒药的扣分
+
+// 游戏配置
+#define GAME_WIDTH 50
+#define GAME_HEIGHT 25
+#define SCORE_INCREASE 10
+#define INITIAL_SPEED 200
+#define MIN_SPEED 100
+#define MAX_SPEED 280
+#define COLOR_SNAKE 14    // 蛇的颜色
+#define COLOR_FOOD 12     // 食物的颜色
+#define COLOR_POISON 10   // 毒药的颜色
+#define COLOR_MIRROR 11   // 镜像的颜色
+#define COLOR_SECOND_SNAKE 9  // 第二条蛇的颜色
+
+// 定义表示位置的结构体类型
+typedef struct snake{
+    int x;
+    int y;
+    struct snake *next;
+}snake;
+
+// 障碍物定义
+typedef struct obstacle {
+    int x;
+    int y;
+} obstacle;
+
+// 全局变量 
+int score = 0;             // 当前得分
+int speed = INITIAL_SPEED; // 存储当前速度
+int status;                // 当前移动方向
+int gameMode = NORMAL_MODE; // 默认游戏模式
+snake *tail, *head;        // 存储蛇头蛇尾 
+snake *food, *q;           // q用于遍历链表 
+obstacle *obstacles;       // 障碍物数组
+int obstacleCount = 0;
+int maxObstacles = 0;
+HANDLE hOUT;
+int foodTimer = 0;         // 食物计时器
+int growthTimer = 0;       // 生长模式计时器
+int poisonTimer = 0;       // 毒药计时器
+int poisonExists = 0;      // 毒药是否存在
+snake *poison;             // 毒药位置
+int gameRunning = 1;       // 游戏运行状态
+int paused = 0;            // 暂停状态
+int soundEnabled = 1;      // 音效开关
+
+// 新增模式相关变量
+int splitSnakeCount = 1;       // 分裂模式：当前蛇的数量
+snake *secondHead = NULL;      // 分裂模式：第二条蛇头
+int splitDirections[2];        // 分裂模式：两条蛇的方向
+int mirrorActive = 0;          // 镜像模式：是否激活镜像
+snake mirrorHead;              // 镜像模式：镜像蛇头位置
+
+// 游戏记录
+int highScore = 0;             // 最高分
+char highScorePlayer[20] = "Anonymous"; // 最高分玩家
+
+// 函数声明
+void initGame(void);           // 初始化游戏
+int choice(void);              // 载入游戏界面
+int color(int c);              // 设置字体颜色 
+void printGame(void);          // 打印游戏界面 
+void printSnake(void);         // 打印蛇身
+void printFood(void);          // 打印食物
+void printPoison(void);        // 打印毒药
+void printTips(void);          // 打印提示
+void snakeMove(void);          // 主操作函数 
+int biteSelf(void);            // 判断是否咬到了自己
+int encounterWall(void);       // 判断是否撞墙 
+int hitObstacle(void);         // 判断是否撞到障碍物
+void keyboardControl(void);    // 获取击键 
+void speedUp(void);            // 加速
+void speedDown(void);          // 减速
+void endGame(void);            // 结束函数
+char *s_gets(char *st, int n); // 读取字符
+void frees(snake *);           // 释放内存 
+void initGameMode(void);       // 初始化游戏模式
+void generateObstacles(void);  // 生成障碍物
+void printObstacles(void);     // 打印障碍物
+void handlePortal(void);       // 处理传送门
+void handleTimerMode(void);    // 处理限时模式
+void handleGrowthMode(void);   // 处理生长模式
+void handlePoisonMode(void);   // 处理毒药模式
+void handleSplitMode(void);    // 处理分裂模式
+void handleMirrorMode(void);   // 处理镜像模式
+void printModeDescription(void); // 打印模式描述
+void updateStatusBar(void);    // 更新状态栏
+void saveHighScore(void);      // 保存最高分
+void loadHighScore(void);      // 加载最高分
+void playSound(int soundType); // 播放音效
+void clearScreen(void);        // 清屏
+void drawBorder(void);         // 绘制边界
+void drawGameArea(void);       // 绘制游戏区域
+
+int main(int argc, char *argv[]){
+    loadHighScore(); // 加载最高分记录
+    srand((unsigned)time(NULL)); // 初始化随机数种子
+    
+    while (1)
+    {
+        if (choice() == 1)
+            keyboardControl();
+        else
+        {
+            gotoxy(5, 15);
+            printf("按任意键返回");
+            getchar(); // 去除前一个前导换行 
+            while (1)
+            {
+                if (getchar())
+                {
+                    system("cls");
+                    break;
+                }
+            }
+        }
+    }
+    frees(head);
+    if (secondHead) frees(secondHead); // 释放分裂模式的第二条蛇
+    if (obstacles) free(obstacles);
+    if (food) free(food);
+    if (poison) free(poison);
+
+    return 0;
+}
+
+int color(int c)
+{
+    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), c);        //更改文字颜色
+    return 0;
+}
+
+// 初始化游戏
+void initGame(void)
+{
+    score = 0;
+    speed = INITIAL_SPEED;
+    status = RIGHT;
+    splitDirections[0] = RIGHT;
+    gameRunning = 1;
+    paused = 0;
+    
+    // 初始化蛇
+    frees(head);
+    if (secondHead) frees(secondHead);
+    secondHead = NULL;
+    splitSnakeCount = 1;
+    
+    // 初始化食物和毒药
+    if (food) free(food);
+    if (poison) free(poison);
+    poisonExists = 0;
+    foodTimer = 0;
+    growthTimer = 0;
+    poisonTimer = 0;
+    
+    // 初始化模式
+    initGameMode();
+}
+
+int choice(void)
+{
+    int yourchoice;
+    // 画出界面 
+    clearScreen();
+    gotoxy(35, 5);
+    color(11);
+    printf("\t贪吃蛇大作战\n");
+    printf("\n\n");
+    color(13);
+    printf("\t\t★★★★★★★★  Snake!");
+    printf("\t\t★★★★★★★★  Snake!");
+    gotoxy(25, 15);
+    color(12);
+    printf("1.进入游戏\t2.选择模式\t3.查看模式说明\t4.查看游戏说明\t5.查看排行榜\t6.退出游戏\n");
+    color(11);
+    printf("请选择:");
+    scanf("%d", &yourchoice);
+    
+    switch (yourchoice)
+    {
+    case 1:
+        system("cls");
+        initGame();
+        printGame();
+        printSnake();
+        printFood();
+        if (gameMode == WALL_MODE) {
+            generateObstacles();
+            printObstacles();
+        }
+        if (gameMode == POISON_MODE) {
+            poisonExists = 0;
+            poisonTimer = 0;
+        }
+        break;
+    case 2:
+        system("cls");
+        gotoxy(35, 5);
+        color(11);
+        printf("\t选择游戏模式\n");
+        color(12);
+        printf("1. 普通模式\n");
+        printf("2. 障碍模式\n");
+        printf("3. 传送门模式\n");
+        printf("4. 毒药模式\n");
+        printf("5. 限时模式\n");
+        printf("6. 生长模式\n");
+        printf("7. 分裂模式\n");
+        printf("8. 镜像模式\n");
+        color(11);
+        printf("请选择模式: ");
+        scanf("%d", &gameMode);
+        if (gameMode < 1 || gameMode > 8) gameMode = NORMAL_MODE; // 确保模式有效
+        system("cls");
+        break;
+    case 3:
+        printModeDescription();
+        system("cls");
+        break;
+    case 4:
+        system("cls");
+        printTips();
+        break;
+    case 5:
+        system("cls");
+        gotoxy(35, 5);
+        color(11);
+        printf("\t游戏排行榜\n");
+        color(12);
+        printf("最高分: %d  玩家: %s\n", highScore, highScorePlayer);
+        color(11);
+        printf("\n按任意键返回...");
+        getch();
+        system("cls");
+        break;
+    case 6:
+        system("cls");
+        gotoxy(30, 10);
+        color(11);
+        printf("Bye!");
+        exit(0);
+    default:
+        system("cls");
+        printf("没有此序号,请输入1-6之间的数字\n");
+        Sleep(2000);
+        system("cls");
+    }
+    return yourchoice;
+}
+
+void printModeDescription(void)
+{
+    system("cls");
+    gotoxy(35, 5);
+    color(11);
+    printf("\t游戏模式说明\n");
+    color(12);
+    printf("1. 普通模式 - 没有墙，可以穿过边界\n");
+    printf("   - 特点: 没有边界限制，撞到自己游戏结束\n");
+    printf("2. 障碍模式 - 增加随机障碍物\n");
+    printf("   - 特点: 地图中随机生成障碍物，撞到障碍物游戏结束\n");
+    printf("3. 传送门模式 - 边界有传送门\n");
+    printf("   - 特点: 从一边边界出去会从另一边边界出现\n");
+    printf("4. 毒药模式 - 随机生成毒药，吃到会扣分\n");
+    printf("   - 特点: 地图中会出现毒药，吃到后扣除分数\n");
+    printf("5. 限时模式 - 食物会在一段时间后消失\n");
+    printf("   - 特点: 食物有存在时间，必须及时吃掉，否则会重新生成\n");
+    printf("6. 生长模式 - 吃到食物后蛇会持续生长一段时间\n");
+    printf("   - 特点: 吃到食物后，蛇会在一段时间内自动生长\n");
+    printf("7. 分裂模式 - 吃到食物后蛇会分裂成两条\n");
+    printf("   - 特点: 分裂后的两条蛇共享分数，操作复杂度增加\n");
+    printf("8. 镜像模式 - 蛇的移动会生成镜像\n");
+    printf("   - 特点: 镜像蛇与本体同步移动，撞到镜像也会结束游戏\n");
+    color(11);
+    printf("\n按任意键返回...");
+    getch();
+}
+
+void printTips(void)
+{
+    clearScreen();
+    color(11);
+    printf("***********游戏操作指南************\n");
+    printf("方向键: 控制蛇的移动\n");
+    printf("空格键: 暂停/继续游戏\n");
+    printf("F1键: 加速\n");
+    printf("F2键: 减速\n");
+    printf("ESC键: 退出游戏\n");
+    printf("S键: 切换音效开关\n\n");
+    
+    color(11);
+    printf("***********游戏目标************\n");
+    printf("吃到食物，使蛇变长，获得更高分数\n");
+    printf("注意不要撞到墙壁、障碍物、自己或镜像\n\n");
+    
+    if (gameMode == POISON_MODE)
+        printf("毒药模式中要小心绿色的毒药，吃到会扣分!\n");
+    if (gameMode == SPLIT_MODE)
+        printf("分裂模式中，吃到食物后蛇会分裂为两条，需同时控制!\n");
+    if (gameMode == MIRROR_MODE)
+        printf("镜像模式中，注意镜像蛇的位置，撞到镜像也会结束游戏!\n");
+    
+    color(11);
+    printf("\n按任意键返回...");
+    getch();
+    system("cls");
+}
+
+void printGame()
+{
+    drawBorder();
+    drawGameArea();
+    updateStatusBar();
+}
+
+void drawBorder()
+{
+    int i, j;
+    
+    // 打印上下界面
+    for (i = 0; i <= GAME_WIDTH; i += 2)
+    {
+        gotoxy(i, 0);
+        printf("□");
+        gotoxy(i, GAME_HEIGHT);
+        printf("□");
+    }
+    
+    // 打印左右界面
+    for (i = 0; i <= GAME_HEIGHT; i += 1)
+    {
+        gotoxy(0, i);
+        printf("□");
+        gotoxy(GAME_WIDTH, i);
+        printf("□");
+    }
+}
+
+void drawGameArea()
+{
+    int i, j;
+    
+    // 打印中间网格
+    for (i = 1; i <= GAME_HEIGHT - 1; i += 1)
+    {
+        for (j = 2; j <= GAME_WIDTH - 2; j += 2)
+        {
+            gotoxy(j, i);
+            color(11);
+            printf("■");
+        }
+    }
+}
+
+void updateStatusBar()
+{
+    gotoxy(GAME_WIDTH + 5, 3);
+    color(11);
+    printf("当前分数: %d", score);
+    
+    gotoxy(GAME_WIDTH + 5, 5);
+    printf("当前速度: %d", speed);
+    
+    gotoxy(GAME_WIDTH + 5, 7);
+    printf("最高分: %d", highScore);
+    
+    gotoxy(GAME_WIDTH + 5, 9);
+    printf("操作指南:");
+    gotoxy(GAME_WIDTH + 5, 11);
+    printf("↑↓←→: 移动方向");
+    gotoxy(GAME_WIDTH + 5, 13);
+    printf("空格: 暂停/继续");
+    gotoxy(GAME_WIDTH + 5, 15);
+    printf("F1: 加速  F2: 减速");
+    gotoxy(GAME_WIDTH + 5, 17);
+    printf("ESC: 退出游戏");
+    gotoxy(GAME_WIDTH + 5, 19);
+    printf("S: 音效 %s", soundEnabled ? "开启" : "关闭");
+    
+    gotoxy(GAME_WIDTH + 5, 22);
+    printf("当前模式: ");
+    switch(gameMode) {
+        case NORMAL_MODE: printf("普通模式"); break;
+        case WALL_MODE: printf("障碍模式"); break;
+        case PORTAL_MODE: printf("传送门模式"); break;
+        case POISON_MODE: printf("毒药模式"); break;
+        case TIMER_MODE: printf("限时模式"); break;
+        case GROW_MODE: printf("生长模式"); break;
+        case SPLIT_MODE: printf("分裂模式"); break;
+        case MIRROR_MODE: printf("镜像模式"); break;
+    }
+    
+    if (gameMode == TIMER_MODE) {
+        gotoxy(GAME_WIDTH + 5, 24);
+        printf("食物剩余时间: --");
+    } else if (gameMode == GROW_MODE) {
+        gotoxy(GAME_WIDTH + 5, 24);
+        printf("生长剩余时间: --");
+    } else if (gameMode == POISON_MODE) {
+        gotoxy(GAME_WIDTH + 5, 24);
+        if (poisonExists)
+            printf("毒药剩余时间: %d", 100 - poisonTimer);
+        else
+            printf("毒药生成倒计时: %d", poisonTimer);
+    } else if (gameMode == SPLIT_MODE) {
+        gotoxy(GAME_WIDTH + 5, 24);
+        printf("分裂蛇数量: %d", splitSnakeCount);
+    } else if (gameMode == MIRROR_MODE) {
+        gotoxy(GAME_WIDTH + 5, 24);
+        printf("镜像模式已激活");
+    }
+}
+
+void printSnake(void)
+{
+    int i;
+    // 设定蛇尾(16,13),头插入,初始向右 
+    tail = (snake*)malloc(sizeof(snake));
+    tail->x = 16;
+    tail->y = 13;
+    tail->next = NULL;
+    
+    // 设定初始蛇长是4
+    for (i = 1; i <= 4; i++)
+    {
+        head = (snake*)malloc(sizeof(snake));
+        head->next = tail;
+        head->x = 16 + 2 * i;
+        head->y = 13;
+        tail = head; // 头成为尾
+    }
+    
+    // 输出蛇身
+    q = head;
+    while (q->next)
+    {
+        gotoxy(q->x, q->y);
+        color(COLOR_SNAKE);
+        printf("★");
+        q = q->next;
+    }
+    
+    // 初始化分裂模式变量
+    splitSnakeCount = 1;
+    secondHead = NULL;
+}
+
+void printFood(void)
+{
+    int validPosition;
+    
+    do {
+        validPosition = 1;
+        food = (snake*)malloc(sizeof(snake));
+        food->x = 1; // 初始化x坐标 
+        while (food->x % 2 && food->x)
+        {
+            food->x = rand() % (GAME_WIDTH - 2) + 2; // 2-48 
+        }
+        food->y = rand() % (GAME_HEIGHT - 2) + 1; // 1-24 
+        
+        // 检查食物是否与蛇身重叠
+        q = head; 
+        while (q->next)
+        {
+            if (q->x == food->x && q->y == food->y)
+            {
+                validPosition = 0;
+                free(food);
+                break;
+            }
+            q = q->next;
+        }
+        
+        // 检查食物是否与障碍物重叠(如果在障碍模式下)
+        if (validPosition && gameMode == WALL_MODE) {
+            for (int i = 0; i < obstacleCount; i++) {
+                if (food->x == obstacles[i].x && food->y == obstacles[i].y) {
+                    validPosition = 0;
+                    free(food);
+                    break;
+                }
+            }
+        }
+        
+        // 检查食物是否与毒药重叠(如果在毒药模式下)
+        if (validPosition && gameMode == POISON_MODE && poisonExists) {
+            if (food->x == poison->x && food->y == poison->y) {
+                validPosition = 0;
+                free(food);
+            }
+        }
+        
+        // 检查食物是否与第二条蛇重叠(如果在分裂模式下)
+        if (validPosition && gameMode == SPLIT_MODE && splitSnakeCount > 1) {
+            q = secondHead;
+            while (q->next) {
+                if (q->x == food->x && q->y == food->y) {
+                    validPosition = 0;
+                    free(food);
+                    break;
+                }
+                q = q->next;
+            }
+        }
+    } while (!validPosition);
+    
+    // 重置计时器
+    foodTimer = 0;
+    
+    // 打印食物
+    gotoxy(food->x, food->y);
+    color(COLOR_FOOD);
+    printf("●");
+    
+    if (soundEnabled) {
+        Beep(500, 100); // 食物出现音效
+    }
+}
+
+void printPoison(void)
+{
+    if (gameMode != POISON_MODE || !poisonExists) return;
+    
+    int validPosition;
+    
+    do {
+        validPosition = 1;
+        poison = (snake*)malloc(sizeof(snake));
+        poison->x = 1; // 初始化x坐标 
+        while (poison->x % 2 && poison->x)
+        {
+            poison->x = rand() % (GAME_WIDTH - 2) + 2; // 2-48 
+        }
+        poison->y = rand() % (GAME_HEIGHT - 2) + 1; // 1-24 
+        
+        // 检查是否与蛇身重叠
+        q = head; 
+        while (q->next)
+        {
+            if (q->x == poison->x && q->y == poison->y)
+            {
+                validPosition = 0;
+                free(poison);
+                break;
+            }
+            q = q->next;
+        }
+        
+        // 检查是否与障碍物重叠(如果在障碍模式下)
+        if (validPosition && gameMode == WALL_MODE) {
+            for (int i = 0; i < obstacleCount; i++) {
+                if (poison->x == obstacles[i].x && poison->y == obstacles[i].y) {
+                    validPosition = 0;
+                    free(poison);
+                    break;
+                }
+            }
+        }
+        
+        // 检查是否与食物重叠
+        if (validPosition && poison->x == food->x && poison->y == food->y) {
+            validPosition = 0;
+            free(poison);
+        }
+        
+        // 检查是否与第二条蛇重叠(如果在分裂模式下)
+        if (validPosition && gameMode == SPLIT_MODE && splitSnakeCount > 1) {
+            q = secondHead;
+            while (q->next) {
+                if (q->x == poison->x && q->y == poison->y) {
+                    validPosition = 0;
+                    free(poison);
+                    break;
+                }
+                q = q->next;
+            }
+        }
+    } while (!validPosition);
+    
+    // 重置计时器
+    poisonTimer = 0;
+    
+    // 打印毒药
+    gotoxy(poison->x, poison->y);
+    color(COLOR_POISON);
+    printf("●");
+    
+    if (soundEnabled) {
+        Beep(300, 100); // 毒药出现音效
+    }
+}
+
+void initGameMode(void)
+{
+    if (gameMode == WALL_MODE) {
+        // 设置障碍物数量
+        maxObstacles = 10;
+        obstacles = (obstacle*)malloc(maxObstacles * sizeof(obstacle));
+    } else if (obstacles) {
+        free(obstacles);
+        obstacles = NULL;
+    }
+    
+    if (gameMode == POISON_MODE) {
+        poisonExists = 0;
+        poisonTimer = 0;
+    }
+    
+    if (gameMode == SPLIT_MODE) {
+        splitSnakeCount = 1;
+        secondHead = NULL;
+    }
+    
+    if (gameMode == MIRROR_MODE) {
+        mirrorActive = 0;
+    }
+}
+
+void generateObstacles(void)
+{
+    if (gameMode != WALL_MODE) return;
+    
+    srand((unsigned)time(NULL));
+    obstacleCount = 0;
+    
+    // 生成随机障碍物
+    while (obstacleCount < maxObstacles) {
+        int validPosition = 1;
+        obstacle newObstacle;
+        newObstacle.x = rand() % (GAME_WIDTH - 2) + 2; // 2-48
+        // 确保x坐标是偶数
+        if (newObstacle.x % 2 != 0) newObstacle.x++;
+        newObstacle.y = rand() % (GAME_HEIGHT - 2) + 1; // 1-24
+        
+        // 检查是否与蛇重叠
+        q = head;
+        while (q->next) {
+            if (q->x == newObstacle.x && q->y == newObstacle.y) {
+                validPosition = 0;
+                break;
+            }
+            q = q->next;
+        }
+        
+        // 检查是否与其他障碍物重叠
+        for (int i = 0; i < obstacleCount; i++) {
+            if (newObstacle.x == obstacles[i].x && newObstacle.y == obstacles[i].y) {
+                validPosition = 0;
+                break;
+            }
+        }
+        
+        if (validPosition) {
+            obstacles[obstacleCount] = newObstacle;
+            obstacleCount++;
+        }
+    }
+}
+
+void printObstacles(void)
+{
+    if (gameMode != WALL_MODE) return;
+    
+    for (int i = 0; i < obstacleCount; i++) {
+        gotoxy(obstacles[i].x, obstacles[i].y);
+        color(8); // 深灰色
+        printf("■");
+    }
+}
+
+void handlePortal(void)
+{
+    // 处理蛇头碰到边界时的传送
+    if (head->x <= 0) head->x = GAME_WIDTH - 2;
+    else if (head->x >= GAME_WIDTH) head->x = 2;
+    else if (head->y <= 0) head->y = GAME_HEIGHT - 1;
+    else if (head->y >= GAME_HEIGHT) head->y = 1;
+    
+    // 如果有第二条蛇，也处理传送
+    if (gameMode == SPLIT_MODE && splitSnakeCount > 1) {
+        if (secondHead->x <= 0) secondHead->x = GAME_WIDTH - 2;
+        else if (secondHead->x >= GAME_WIDTH) secondHead->x = 2;
+        else if (secondHead->y <= 0) secondHead->y = GAME_HEIGHT - 1;
+        else if (secondHead->y >= GAME_HEIGHT) secondHead->y = 1;
+    }
+}
+
+void handleTimerMode(void)
+{
+    foodTimer++;
+    
+    // 显示剩余时间
+    int timeLeft = 100 - foodTimer;
+    gotoxy(GAME_WIDTH + 5, 24);
+    printf("食物剩余时间: %d", timeLeft);
+    
+    // 如果食物存在时间超过限制，重新生成
+    if (foodTimer >= 100) {
+        free(food);
+        printFood();
+        
+        if (soundEnabled) {
+            Beep(400, 100); // 食物消失音效
+        }
+    }
+}
+
+void handleGrowthMode(void)
+{
+    if (growthTimer > 0) {
+        growthTimer--;
+        
+        // 显示剩余时间
+        gotoxy(GAME_WIDTH + 5, 24);
+        printf("生长剩余时间: %d", growthTimer);
+        
+        // 自动增长
+        if (growthTimer % 5 == 0) { // 每5个周期增长一次
+            snake *grow = (snake*)malloc(sizeof(snake));
+            
+            // 根据当前方向决定增长位置
+            switch(status) {
+                case UP:    grow->y = head->y - 1; break;
+                case DOWN:  grow->y = head->y + 1; break;
+                case LEFT:  grow->x = head->x - 2; break;
+                case RIGHT: grow->x = head->x + 2; break;
+            }
+            grow->x = head->x;
+            grow->y = head->y;
+            
+            // 添加到蛇头
+            grow->next = head;
+            head = grow;
+            
+            // 显示新增部分
+            gotoxy(grow->x, grow->y);
+            color(COLOR_SNAKE);
+            printf("★");
+            
+            if (soundEnabled) {
+                Beep(550, 50); // 生长音效
+            }
+        }
+    } else {
+        // 生长结束，更新显示
+        gotoxy(GAME_WIDTH + 5, 24);
+        printf("生长剩余时间: --");
+    }
+}
+
+void handlePoisonMode(void)
+{
+    if (poisonExists) {
+        poisonTimer++;
+        
+        // 显示剩余时间
+        gotoxy(GAME_WIDTH + 5, 24);
+        printf("毒药剩余时间: %d", 100 - poisonTimer);
+        
+        // 如果毒药存在时间超过限制，移除
+        if (poisonTimer >= 100) {
+            poisonExists = 0;
+            poisonTimer = 0;
+        }
+    } else {
+        poisonTimer++;
+        
+        // 显示冷却时间
+        gotoxy(GAME_WIDTH + 5, 24);
+        printf("毒药生成倒计时: %d", poisonTimer);
+        
+        // 随机生成毒药
+        if (poisonTimer >= 200 && rand() % 100 == 0) {
+            poisonExists = 1;
+            printPoison();
+        }
+    }
+}
+
+// 处理分裂模式
+void handleSplitMode(void) {
+    if (splitSnakeCount <= 1) return;
+    
+    // 第二条蛇的移动逻辑
+    snake *secondNext = (snake*)malloc(sizeof(snake));
+    
+    // 根据方向移动
+    switch(splitDirections[1]) {
+        case UP:
+            secondNext->x = secondHead->x;
+            secondNext->y = secondHead->y - 1;
+            break;
+        case DOWN:
+            secondNext->x = secondHead->x;
+            secondNext->y = secondHead->y + 1;
+            break;
+        case LEFT:
+            secondNext->x = secondHead->x - 2;
+            secondNext->y = secondHead->y;
+            break;
+        case RIGHT:
+            secondNext->x = secondHead->x + 2;
+            secondNext->y = secondHead->y;
+            break;
+    }
+    
+    // 检查第二条蛇是否撞墙
+    if (secondNext->x <= 0 || secondNext->x >= GAME_WIDTH || secondNext->y <= 0 || secondNext->y >= GAME_HEIGHT) {
+        gotoxy(GAME_WIDTH + 5, 11);
+        color(12);
+        printf("第二条蛇撞到墙啦!");
+        
+        if (soundEnabled) {
+            Beep(200, 500); // 碰撞音效
+        }
+        
+        Sleep(1500);
+        endGame();
+        return;
+    }
+    
+    // 检查第二条蛇是否咬到自己
+    q = secondHead;
+    while (q->next) {
+        if (q->x == secondNext->x && q->y == secondNext->y) {
+            gotoxy(GAME_WIDTH + 5, 11);
+            color(12);
+            printf("第二条蛇咬到自己啦!");
+            
+            if (soundEnabled) {
+                Beep(200, 500); // 碰撞音效
+            }
+            
+            Sleep(1500);
+            endGame();
+            return;
+        }
+        q = q->next;
+    }
+    
+    // 检查第二条蛇是否撞到障碍物
+    if (gameMode == WALL_MODE) {
+        for (int i = 0; i < obstacleCount; i++) {
+            if (secondNext->x == obstacles[i].x && secondNext->y == obstacles[i].y) {
+                gotoxy(GAME_WIDTH + 5, 11);
+                color(12);
+                printf("第二条蛇撞到障碍物啦!");
+                
+                if (soundEnabled) {
+                    Beep(200, 500); // 碰撞音效
+                }
+                
+                Sleep(1500);
+                endGame();
+                return;
+            }
+        }
+    }
+    
+    // 检查两条蛇是否相撞
+    q = head;
+    while (q->next) {
+        if (q->x == secondNext->x && q->y == secondNext->y) {
+            gotoxy(GAME_WIDTH + 5, 11);
+            color(12);
+            printf("两条蛇相撞啦!");
+            
+            if (soundEnabled) {
+                Beep(200, 500); // 碰撞音效
+            }
+            
+            Sleep(1500);
+            endGame();
+            return;
+        }
+        q = q->next;
+    }
+    
+    // 更新第二条蛇的位置
+    secondNext->next = secondHead;
+    secondHead = secondNext;
+    
+    // 绘制第二条蛇（蓝色表示）
+    q = secondHead;
+    while (q->next->next) {
+        gotoxy(q->x, q->y);
+        color(COLOR_SECOND_SNAKE);
+        printf("★");
+        q = q->next;
+    }
+    
+    // 移动第二条蛇尾
+    gotoxy(q->next->x, q->next->y);
+    color(11);
+    printf("■");
+    free(q->next);
+    q->next = NULL;
+    
+    // 处理第二条蛇吃食物
+    if (secondHead->x == food->x && secondHead->y == food->y) {
+        // 第二条蛇吃到食物，加分并生成新食物
+        score += SCORE_INCREASE;
+        updateStatusBar();
+        
+        if (soundEnabled) {
+            Beep(800, 200); // 吃到食物音效
+        }
+        
+        // 生成新食物
+        free(food);
+        printFood();
+        
+        // 每得50分增加一点速度
+        if (score % 50 == 0 && speed < MAX_SPEED) {
+            speed += 10;
+            updateStatusBar();
+        }
+        
+        // 分裂模式：如果蛇数量小于3，继续分裂
+        if (splitSnakeCount < 3) {
+            splitSnakeCount++;
+            
+            // 创建第三条蛇
+            snake *thirdHead = (snake*)malloc(sizeof(snake));
+            thirdHead->x = secondHead->x;
+            thirdHead->y = secondHead->y;
+            
+            // 随机生成第三条蛇的方向
+            int dir = rand() % 4 + 1;
+            splitDirections[2] = dir;
+            
+            // 打印第三条蛇头
+            gotoxy(thirdHead->x, thirdHead->y);
+            color(13); // 紫色区分
+            printf("★");
+            
+            // 速度调整
+            speed = speed * 2 / 3;
+            if (speed < MIN_SPEED) speed = MIN_SPEED; // 最低速度限制
+            updateStatusBar();
+        }
+    }
+}
+
+// 处理镜像模式
+void handleMirrorMode(void) {
+    // 计算镜像位置（水平翻转）
+    mirrorHead.x = GAME_WIDTH - head->x;
+    mirrorHead.y = head->y;
+    
+    // 绘制镜像蛇（青色表示）
+    q = head;
+    snake *mirrorCurrent = &mirrorHead;
+    
+    while (q->next) {
+        // 计算镜像位置
+        mirrorCurrent->x = GAME_WIDTH - q->x;
+        mirrorCurrent->y = q->y;
+        
+        // 绘制镜像
+        gotoxy(mirrorCurrent->x, mirrorCurrent->y);
+        color(COLOR_MIRROR);
+        printf("☆");
+        
+        // 检查本体是否撞到镜像
+        if (q->next && (q->next->x == mirrorCurrent->x && q->next->y == mirrorCurrent->y)) {
+            gotoxy(GAME_WIDTH + 5, 11);
+            color(12);
+            printf("撞到镜像啦!");
+            
+            if (soundEnabled) {
+                Beep(200, 500); // 碰撞音效
+            }
+            
+            Sleep(1500);
+            endGame();
+            return;
+        }
+        
+        // 检查镜像是否撞墙
+        if (mirrorCurrent->x <= 0 || mirrorCurrent->x >= GAME_WIDTH || mirrorCurrent->y <= 0 || mirrorCurrent->y >= GAME_HEIGHT) {
+            gotoxy(GAME_WIDTH + 5, 11);
+            color(12);
+            printf("镜像撞到墙啦!");
+            
+            if (soundEnabled) {
+                Beep(200, 500); // 碰撞音效
+            }
+            
+            Sleep(1500);
+            endGame();
+            return;
+        }
+        
+        q = q->next;
+    }
+}
+
+void keyboardControl(void)
+{
+    status = RIGHT; // 初始蛇向右移动
+    splitDirections[0] = RIGHT; // 第一条蛇初始方向
+    
+    while (gameRunning)
+    {
+        if (paused) {
+            Sleep(100);
+            continue;
+        }
+        
+        // 处理按键输入
+        if (GetAsyncKeyState(VK_UP) && status != DOWN)
+        {
+            status = UP;
+            splitDirections[0] = UP;
+        }
+        else if (GetAsyncKeyState(VK_DOWN) && status != UP)
+        {
+            status = DOWN;
+            splitDirections[0] = DOWN;
+        }
+        else if (GetAsyncKeyState(VK_LEFT) && status != RIGHT)
+        {
+            status = LEFT;
+            splitDirections[0] = LEFT;
+        }
+        else if (GetAsyncKeyState(VK_RIGHT) && status != LEFT)
+        {
+            status = RIGHT;
+            splitDirections[0] = RIGHT;
+        }
+        else if (GetAsyncKeyState(VK_SPACE)) // 空格暂停
+        {
+            paused = !paused;
+            gotoxy(GAME_WIDTH + 5, 11);
+            if (paused) {
+                color(13);
+                printf("游戏已暂停");
+                if (soundEnabled) {
+                    Beep(600, 100);
+                }
+            } else {
+                printf("            ");
+                if (soundEnabled) {
+                    Beep(700, 100);
+                }
+            }
+            Sleep(300);
+        }
+        else if (GetAsyncKeyState(VK_ESCAPE)) // ESC退出
+        {
+            endGame();
+            return;
+        }
+        else if (GetAsyncKeyState(VK_F1)) // F1加速
+        {
+            speedUp();
+            updateStatusBar();
+            if (soundEnabled) {
+                Beep(800, 50);
+            }
+        }
+        else if (GetAsyncKeyState(VK_F2)) // F2减速
+        {
+            speedDown();
+            updateStatusBar();
+            if (soundEnabled) {
+                Beep(600, 50);
+            }
+        }
+        else if (GetAsyncKeyState('S')) // S切换音效
+        {
+            soundEnabled = !soundEnabled;
+            updateStatusBar();
+            if (soundEnabled) {
+                Beep(700, 100);
+            }
+            Sleep(300); // 防止重复触发
+        }
+        
+        snakeMove();
+    }
+}
+
+void speedUp(void)
+{
+    if (speed > MIN_SPEED)
+        speed -= 20;
+}
+
+void speedDown(void)
+{
+    if (speed < MAX_SPEED)
+        speed += 20;
+}
+
+void endGame(void)
+{
+    gameRunning = 0;
+    
+    // 保存最高分
+    if (score > highScore) {
+        highScore = score;
+        
+        // 获取玩家姓名
+        system("cls");
+        gotoxy(30, 10);
+        color(11);
+        printf("恭喜你获得了最高分: %d!", score);
+        gotoxy(30, 12);
+        printf("请输入你的名字: ");
+        s_gets(highScorePlayer, 19);
+        
+        // 保存记录
+        saveHighScore();
+    }
+    
+    system("cls");
+    gotoxy(30, 10);
+    color(11);
+    printf("游戏结束! 最终得分: %d", score);
+    gotoxy(30, 12);
+    printf("最高分: %d  玩家: %s", highScore, highScorePlayer);
+    gotoxy(30, 14);
+    printf("按任意键返回主菜单...");
+    getch();
+    system("cls");
+}
+
+void saveHighScore(void)
+{
+    FILE *file = fopen("snake_high_score.txt", "w");
+    if (file) {
+        fprintf(file, "%d\n%s", highScore, highScorePlayer);
+        fclose(file);
+    }
+}
+
+void loadHighScore(void)
+{
+    FILE *file = fopen("snake_high_score.txt", "r");
+    if (file) {
+        fscanf(file, "%d\n", &highScore);
+        fgets(highScorePlayer, 20, file);
+        // 去除换行符
+        highScorePlayer[strcspn(highScorePlayer, "\n")] = 0;
+        fclose(file);
+    }
+}
+
+void snakeMove(void)
+{
+    if (!gameRunning || paused) return;
+    
+    snake *snakenext;
+    snakenext = (snake*)malloc(sizeof(snake));
+    
+    int gameOver = 0;
+    
+    if (biteSelf())
+    {
+        gotoxy(GAME_WIDTH + 5, 11);
+        color(12);
+        printf("咬到自己啦!");
+        gameOver = 1;
+    }
+    else if (gameMode != NORMAL_MODE && encounterWall())
+    {
+        gotoxy(GAME_WIDTH + 5, 11);
+        color(12);
+        printf("撞到墙啦!");
+        gameOver = 1;
+    }
+    else if (gameMode == WALL_MODE && hitObstacle())
+    {
+        gotoxy(GAME_WIDTH + 5, 11);
+        color(12);
+        printf("撞到障碍物啦!");
+        gameOver = 1;
+    }
+    
+    if (gameOver) {
+        if (soundEnabled) {
+            Beep(200, 500); // 碰撞音效
+        }
+        
+        Sleep(1500);
+        endGame();
+        free(snakenext);
+        return;
+    }
+    
+    // 前两个条件判断完成才开始移动 
+    Sleep(350 - speed);
+    
+    // 处理特殊模式
+    if (gameMode == PORTAL_MODE) {
+        handlePortal();
+    }
+    
+    if (gameMode == TIMER_MODE) {
+        handleTimerMode();
+    }
+    
+    if (gameMode == GROW_MODE) {
+        handleGrowthMode();
+    }
+    
+    if (gameMode == POISON_MODE) {
+        handlePoisonMode();
+    }
+    
+    if (gameMode == SPLIT_MODE) {
+        handleSplitMode();
+    }
+    
+    if (gameMode == MIRROR_MODE) {
+        handleMirrorMode();
+    }
+    
+    // 正常移动逻辑
+    switch(status) {
+        case UP:
+            snakenext->x = head->x;
+            snakenext->y = head->y - 1;
+            break;
+        case DOWN:
+            snakenext->x = head->x;
+            snakenext->y = head->y + 1;
+            break;
+        case LEFT:
+            snakenext->x = head->x - 2;
+            snakenext->y = head->y;
+            break;
+        case RIGHT:
+            snakenext->x = head->x + 2;
+            snakenext->y = head->y;
+            break;
+    }
+    
+    snakenext->next = head;
+    head = snakenext;
+    
+    // 处理食物和毒药
+    int ateFood = 0;
+    q = head;
+    
+    // 检查是否吃到普通食物
+    if (snakenext->x == food->x && snakenext->y == food->y)
+    {
+        ateFood = 1;
+        
+        // 普通食物，加分
+        while (q)
+        {
+            gotoxy(q->x, q->y);
+            color(COLOR_SNAKE);
+            printf("★");
+            q = q->next;
+        }
+        
+        score += SCORE_INCREASE;
+        updateStatusBar();
+        
+        if (soundEnabled) {
+            Beep(800, 200); // 吃到食物音效
+        }
+        
+        // 每得50分增加一点速度
+        if (score % 50 == 0 && speed < MAX_SPEED) {
+            speed += 10;
+            updateStatusBar();
+        }
+        
+        // 生长模式特殊处理
+        if (gameMode == GROW_MODE) {
+            growthTimer = 50; // 设置生长计时器
+        }
+        
+        // 分裂模式特殊处理
+        if (gameMode == SPLIT_MODE && splitSnakeCount == 1) {
+            // 分裂为两条蛇
+            splitSnakeCount = 2;
+            secondHead = (snake*)malloc(sizeof(snake));
+            secondHead->x = head->x;
+            secondHead->y = head->y;
+            
+            // 随机生成第二条蛇的方向（避免与本体方向相反）
+            int dir = rand() % 4 + 1;
+            while (dir == status || (dir == UP && status == DOWN) || (dir == LEFT && status == RIGHT)) {
+                dir = rand() % 4 + 1;
+            }
+            splitDirections[1] = dir;
+            
+            // 打印第二条蛇头
+            gotoxy(secondHead->x, secondHead->y);
+            color(COLOR_SECOND_SNAKE);
+            printf("★");
+            
+            // 速度调整
+            speed = speed * 2 / 3;
+            if (speed < MIN_SPEED) speed = MIN_SPEED; // 最低速度限制
+            updateStatusBar();
+            
+            if (soundEnabled) {
+                Beep(900, 150); // 分裂音效
+            }
+        }
+        
+        // 生成新食物
+        free(food);
+        printFood();
+    }
+    // 检查是否吃到毒药(毒药模式)
+    else if (gameMode == POISON_MODE && poisonExists && 
+             snakenext->x == poison->x && snakenext->y == poison->y)
+    {
+        // 吃到毒药，扣分
+        score -= POISON_PENALTY;
+        if (score < 0) score = 0;
+        updateStatusBar();
+        
+        // 显示扣分提示
+        gotoxy(GAME_WIDTH + 5, 11);
+        color(12);
+        printf("吃到毒药，扣%d分!", POISON_PENALTY);
+        
+        if (soundEnabled) {
+            Beep(300, 300); // 吃到毒药音效
+        }
+        
+        Sleep(500);
+        gotoxy(GAME_WIDTH + 5, 11);
+        printf("                            ");
+        
+        // 移除毒药
+        poisonExists = 0;
+        
+        // 移动蛇身，不增长
+        while (q->next->next)
+        {
+            gotoxy(q->x, q->y);
+            color(COLOR_SNAKE);
+            printf("★");
+            q = q->next;
+        }
+        gotoxy(q->next->x, q->next->y);
+        color(11);
+        printf("■");
+        free(q->next);
+        q->next = NULL;
+    }
+    else
+    {
+        // 移动蛇身，不增长
+        while (q->next->next)
+        {
+            gotoxy(q->x, q->y);
+            color(COLOR_SNAKE);
+            printf("★");
+            q = q->next;
+        }
+        gotoxy(q->next->x, q->next->y);
+        color(11);
+        printf("■");
+        free(q->next);
+        q->next = NULL;
+    }
+}
+
+int biteSelf(void)
+{
+    int x = 0; // 默认未咬到自己
+    q = head->next;
+    
+    // 遍历蛇身 
+    while (q->next)
+    {
+        if (q->x == head->x && q->y == head->y)
+        {
+            x = 1;
+        }
+        q = q->next;
+    }
+
+    return x;
+}
+
+int encounterWall(void)
+{
+    int x = 0; // 默认未撞到墙
+
+    if (head->x <= 0 || head->x >= GAME_WIDTH || head->y <= 0 || head->y >= GAME_HEIGHT)
+        x = 1;
+
+    return x;
+}
+
+int hitObstacle(void)
+{
+    for (int i = 0; i < obstacleCount; i++) {
+        if (head->x == obstacles[i].x && head->y == obstacles[i].y) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void clearScreen(void)
+{
+    system("cls");
+}
+
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    char *find;
+
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        find = strchr(st, '\n');
+        if (find)
+            *find = '\0';
+        else
+        while (getchar() != '\n')
+            continue;
+    }
+
+    return ret_val;
+}
+
+void frees(snake *s)
+{
+    snake *current = s;
+    snake *next;
+
+    while (current)
+    {
+        next = current->next;
+        free(current);
+        current = next;
+    }
+}
